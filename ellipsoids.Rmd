@@ -1,0 +1,172 @@
+---
+title: "Ellipsoid"
+output: html_notebook
+---
+
+Create ellipsoid of the niches of asterias
+
+```{r, message = FALSE}
+# install package
+remotes::install_github("marlonecobos/ellipsenm")
+remotes::install_github("marlonecobos/kuenm")
+```
+
+```{r, message = FALSE}
+# Load
+library(ellipsenm)
+library(here)
+library(wallace)
+library(kuenm)
+library(raster)
+library(dplyr)
+library(rgl)
+```
+
+# Load occurrences 
+
+```{r}
+setwd("~/Desktop/SDMs/asterias_ellipsoids/")
+# NOTE: provide the folder path of the .csv file
+occs_path_Af <- here("data", "occs")
+occs_path_Af <- file.path(occs_path_Af, "2021-12-15_Asterias_forbesi_user.csv")
+# get a list of species occurrence data
+userOccs_Af <- occs_userOccs(
+  txtPath = occs_path_Af, 
+  txtName = "2021-12-15_Asterias_forbesi_user.csv", 
+  txtSep = ",", 
+  txtDec = ".")
+occs_Af <- userOccs_Af$Asterias_forbesi$cleaned
+```
+```{r}
+# NOTE: provide the folder path of the .csv file
+occs_path_Ar <- here("data", "occs")
+occs_path_Ar <- file.path(occs_path_Ar, "2021-12-15_Asterias_rubens_user.csv")
+# get a list of species occurrence data
+userOccs_Ar <- occs_userOccs(
+  txtPath = occs_path_Ar, 
+  txtName = "2021-12-15_Asterias_rubens_user.csv", 
+  txtSep = ",", 
+  txtDec = ".")
+occs_Ar <- userOccs_Ar$Asterias_rubens$cleaned
+```
+```{r}
+# Localities with DNA samples
+samp_hybrid <- read.csv(here("data/occs/dna/hybrid.csv")) %>% 
+  distinct(long, lat) %>% rename(longitude = long, latitude = lat)
+samp_forbesi <- read.csv(here("data/occs/dna/forbesi.csv")) %>% 
+  distinct(long, lat) %>% rename(longitude = long, latitude = lat)
+samp_rubens <- read.csv(here("data/occs/dna/rubens.csv")) %>% 
+  distinct(long, lat) %>% rename(longitude = long, latitude = lat)
+```
+
+# Env data and PCAs
+```{r}
+dir_envs <- here("data", "raster")
+envs_path <- file.path(dir_envs, c('BO22_calcite.tif', 'BO22_carbonphytomean_ss.tif', 'BO22_chlomean_ss.tif', 'BO22_cloudmean.tif', 'BO22_curvelmean_ss.tif', 'BO22_dissoxmean_ss.tif', 'BO22_ironmean_ss.tif', 'BO22_nitratemean_ss.tif', 'BO22_parmean.tif', 'BO22_ph.tif', 'BO22_phosphatemean_ss.tif', 'BO22_ppmean_ss.tif', 'BO22_salinitymean_ss.tif', 'BO22_silicatemean_ss.tif', 'BO22_templtmax_ss.tif', 'BO22_templtmin_ss.tif', 'BO22_tempmean_ss.tif', 'BO22_temprange_ss.tif'))
+# Create environmental object 
+envs <- envs_userEnvs(
+  rasPath = envs_path,
+  rasName = c('BO22_calcite.tif', 'BO22_carbonphytomean_ss.tif', 'BO22_chlomean_ss.tif', 'BO22_cloudmean.tif', 'BO22_curvelmean_ss.tif', 'BO22_dissoxmean_ss.tif', 'BO22_ironmean_ss.tif', 'BO22_nitratemean_ss.tif', 'BO22_parmean.tif', 'BO22_ph.tif', 'BO22_phosphatemean_ss.tif', 'BO22_ppmean_ss.tif', 'BO22_salinitymean_ss.tif', 'BO22_silicatemean_ss.tif', 'BO22_templtmax_ss.tif', 'BO22_templtmin_ss.tif', 'BO22_tempmean_ss.tif', 'BO22_temprange_ss.tif'),
+  doBrick = FALSE)
+```
+```{r}
+# Join occurrences table to create a unique mask for both species (here we need
+# it to include the hybrid area)
+occs_join <- bind_rows(occs_Ar, occs_Af, samp_hybrid, samp_forbesi, samp_rubens)
+# Generate background extent 
+bgExt <- penvs_bgExtent(
+  occs = occs_join,
+  bgSel = "point buffers",
+  bgBuf = 1.25)
+# Mask environmental data to provided extent
+bgMask <- penvs_bgMask(
+  occs = occs_join,
+  envs = envs,
+  bgExt = bgExt)
+# Create PCAs
+pca_result <- kuenm::kuenm_rpca(bgMask, write.result = FALSE, n.pcs = 3)
+# Get PCA rasters
+pca_layers <- pca_result$PCRasters_initial
+```
+```{r}
+pca_result$PCA_loadings
+```
+
+```{r}
+pca_result$PCA_results
+```
+
+```{r}
+# Mask per species (PCA background)
+# Generate background extent 
+bgExt_Ar <- penvs_bgExtent(
+  occs = occs_Ar,
+  bgSel = "point buffers",
+  bgBuf = 1.25)
+# Mask environmental data to provided extent
+bgMask_Ar <- penvs_bgMask(
+  occs = occs_Ar,
+  envs = pca_layers,
+  bgExt = bgExt_Ar)
+# Mask per species
+# Generate background extent 
+bgExt_Af <- penvs_bgExtent(
+  occs = occs_Af,
+  bgSel = "point buffers",
+  bgBuf = 1.25)
+# Mask environmental data to provided extent
+bgMask_Af <- penvs_bgMask(
+  occs = occs_Af,
+  envs = pca_layers,
+  bgExt = bgExt_Af)
+```
+```{r}
+# preparing overlap objects to perform analyses
+niche_Ar <- overlap_object(occs_Ar[, 2:4], species =  "scientific_name", longitude = "longitude", 
+                           latitude = "latitude", method = "mve1", level = 95, 
+                           variables = stack(bgMask_Ar))
+
+niche_Af <- overlap_object(occs_Af[, 2:4], species =  "scientific_name", longitude = "longitude", 
+                           latitude = "latitude", method = "mve1", level = 95, 
+                           variables = stack(bgMask_Af))
+overlap <- ellipsoid_overlap(niche_Ar, niche_Af, overlap_type = "back_union",
+                             significance_test = TRUE, replicates = 100)
+```
+
+# Extract PCA values from DNA samples
+
+```{r}
+pca_hybrid <- extract(pca_layers, samp_hybrid)
+pca_forbesi <- extract(pca_layers, samp_forbesi)
+pca_rubens <- extract(pca_layers, samp_rubens)
+```
+
+
+```{r}
+# plotting only ellipsoids
+rgl::rgl.open()
+plot_overlap(overlap, data = FALSE, niche_col = c("#FF6600", "#006633"))
+# Hybrid points
+rgl::plot3d(x = pca_hybrid[, 1], y = pca_hybrid[, 2], z = pca_hybrid[, 3], 
+            add = TRUE, col = "#6600CC", size = 7)
+# Forbesi points
+rgl::plot3d(x = pca_forbesi[, 1], y = pca_forbesi[, 2], z = pca_forbesi[, 3], 
+            add = TRUE, col = "#009966", size = 7)
+# Rubens points
+rgl::plot3d(x = pca_rubens[, 1], y = pca_rubens[, 2], z = pca_rubens[, 3], 
+            add = TRUE, col = "#FF6600", size = 7)
+# Add color in boxes 
+xat <- c(-15, -10, -5, 0, 5)
+yat <- c(-4, 0, 4, 8)
+zat <- c(-5, 0, 5)
+rgl::rgl.bbox(color = c("#FDFFFF", "black"), emission = "#2C3444", 
+              specular = "#2C3444", shininess = 1, alpha = 0.9, xat = xat, 
+              yat = yat, zat = zat)
+rgl.postscript("Overlap5.pdf", fmt = "pdf", drawText = TRUE)
+```
+```{r}
+summary(overlap)
+```
+
+
+
